@@ -1,5 +1,4 @@
-![street_bagger-01](<img width="938" height="572" alt="beggar" src="https://github.com/user-attachments/assets/34e6c6a3-40ad-4e22-8afc-71df23f256d7" />
-)
+<img width="938" height="572" alt="beggar" src="https://github.com/user-attachments/assets/82bbb8eb-ad58-4959-b3db-9f30481ab589" />
 
 ### FiveM Street Begging Made By Kael Scripts
 
