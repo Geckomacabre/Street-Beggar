@@ -1,6 +1,6 @@
 <img width="938" height="572" alt="beggar" src="https://github.com/user-attachments/assets/82bbb8eb-ad58-4959-b3db-9f30481ab589" />
 
-### FiveM Street Begging Made By Kael Scripts
+### FiveM Street Begging Made By Geckomacabre
 
 ## Dependencies
 - [qb-core](https://github.com/qbcore-framework/qb-core)
