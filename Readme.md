@@ -1,4 +1,4 @@
-![street_bagger-01](https://github.com/abdullasadi/Kael-Street-Beggar/assets/17822126/4eb0bbf9-6885-4973-9233-086f3df10cdb)
+![street_bagger-01](<img width="938" height="572" alt="beggar" src="https://github.com/user-attachments/assets/c199d91a-1270-49e9-9d65-2ed6ec7a686a" />)
 
 ### FiveM Street Begging Made By Kael Scripts
 
@@ -8,7 +8,7 @@
 - [qb-menu](https://github.com/qbcore-framework/qb-menu)
 
 ## Preview
-- [Youtube](https://youtu.be/7Are_U8_dpA)
+- [Youtube](tba)
 
 ## INSTALL
 
@@ -28,15 +28,6 @@ Add the item images to your inventory script
 ```
 
 ## Join With Us
-- [Discord](https://discord.gg/JwWANh8EY5)
-- [Tebex](https://kael.tebex.io/)
+- [Discord](tba)
+- [Tebex](tba)
 
-## More Scripts From Kael Scripts
-- [Illegal Cargo Delivery](https://kael.tebex.io/package/5642002)
-- [Pearls Job](https://kael.tebex.io/package/5672502)
-- [Fivem Crypto Mining](https://kael.tebex.io/package/5547351)
-- [Fivem Organ Run](https://kael.tebex.io/package/5677195)
-- [Bean Machine Job](https://kael.tebex.io/package/5667470)
-- [Japanese Job](https://kael.tebex.io/package/5617380)
-- [Duplicate Anti](https://kael.tebex.io/package/5534122)
-- [Advanced Item Rob](https://kael.tebex.io/package/5549462)
