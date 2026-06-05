@@ -7,7 +7,48 @@
 
 local lastReward    = {}
 local sessionCount  = {}
+local craftCooldown = {}   -- declared here so playerDropped can always reach it
 QBCore = QBCore or nil
+
+-- ============================================================================
+-- Coin helpers
+-- ============================================================================
+
+-- Weighted random draw from Config.CoinPool, returns { [item] = count, ... }
+local function rollCoins(count)
+    local pool = Config.CoinPool or {}
+    local totalWeight = 0
+    for _, e in ipairs(pool) do totalWeight = totalWeight + (e.weight or 1) end
+    if totalWeight == 0 then return {} end
+
+    local result = {}
+    for _ = 1, count do
+        local roll = math.random(totalWeight)
+        local cum  = 0
+        for _, e in ipairs(pool) do
+            cum = cum + (e.weight or 1)
+            if roll <= cum then
+                result[e.item] = (result[e.item] or 0) + 1
+                break
+            end
+        end
+    end
+    return result
+end
+
+-- Give coin items to a player and return a human-readable summary string
+local function giveCoins(src, coins)
+    local parts = {}
+    for item, qty in pairs(coins) do
+        local ok = pcall(function()
+            exports.ox_inventory:AddItem(src, item, qty)
+        end)
+        if ok then
+            parts[#parts + 1] = qty == 1 and ('1 ' .. item) or (qty .. ' ' .. item .. 's')
+        end
+    end
+    return table.concat(parts, ', ')
+end
 
 local function tryPayOx(src, amount)
     if not Config.UseOxInventory then return false end
@@ -111,6 +152,44 @@ RegisterNetEvent('umw:beg:reward', function(amount, generous, sourceTag)
     })
 end)
 
+-- Coin give: NPC hands the player loose change instead of a bill
+RegisterNetEvent('umw:beg:coinGive', function(count)
+    local src = source
+    count = type(count) == 'number' and math.max(1, math.min(count, 20)) or 1
+
+    -- Reuse the same rate-limit bucket as paper money to prevent spam
+    local now = GetGameTimer()
+    if lastReward[src] and (now - lastReward[src]) < Config.RewardCooldownMs then return end
+    lastReward[src] = now
+
+    local coins   = rollCoins(count)
+    local summary = giveCoins(src, coins)
+    if summary == '' then return end
+
+    TriggerClientEvent('ox_lib:notify', src, {
+        type        = 'inform',
+        description = ('You got some change: %s.'):format(summary),
+        duration    = Config.NotifyDuration,
+    })
+end)
+
+-- Payphone: player found coins in the coin return slot
+RegisterNetEvent('um_beg:payphoneCoins', function(count)
+    local src = source
+    count = type(count) == 'number' and math.max(1, math.min(count, 20)) or 1
+
+    local coins   = rollCoins(count)
+    local summary = giveCoins(src, coins)
+    if summary == '' then return end
+
+    TriggerClientEvent('ox_lib:notify', src, {
+        type        = 'success',
+        description = ('Found some change: %s.'):format(summary),
+        duration    = Config.NotifyDuration,
+    })
+    print(('[um_beg] ply %d found payphone coins: %s'):format(src, summary))
+end)
+
 RegisterNetEvent('umw:beg:mugged', function()
     local src = source
     local amount = math.random(Config.Mug.stealMin, Config.Mug.stealMax)
@@ -158,6 +237,9 @@ RegisterNetEvent('um_beg:requestJail', function(minutes)
     lastJailReq[src] = now
     if GetResourceState('rcore_prison') ~= 'started' then
         print('[um_beg] rcore_prison not started — skipping jail')
+        TriggerClientEvent('ox_lib:notify', src, {
+            type = 'error', description = "The officer lets you off with a warning.", duration = 5000,
+        })
         return
     end
     TriggerEvent('rcore_prison:server:JailPlayer', src, minutes)
@@ -174,7 +256,6 @@ AddEventHandler('playerDropped', function() lastJailReq[source] = nil end)
 -- No server hook needed — ox_inventory fires the event directly to the client.
 
 -- Shared crafting logic — called from both the net event (bench zones) and the command (fallback)
-local craftCooldown = {}
 
 local function handleCraftSign(src)
     if not Config.UseOxInventory then
