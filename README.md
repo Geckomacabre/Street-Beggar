@@ -50,7 +50,7 @@ Street survival resource for **Qbox / QBX** servers. Combines a full begging sys
 
 ## Installation
 
-1. Drop the `um_beg` folder into your `resources` directory.
+1. Drop the `Street_Beggar` folder into your `resources` directory.
 2. Add to `server.cfg`:
    ```
    ensure um_beg
