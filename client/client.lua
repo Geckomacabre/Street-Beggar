@@ -7,6 +7,7 @@
 -- ============================================================================
 
 local begging        = false
+local autoBeg        = true  -- true = cars auto-approach; false = manual [E] press mode
 local activeVariant  = nil   -- which Config.BegVariants entry is active
 local heldProp       = nil
 local driverCooldown = {}    -- entity handle -> expireMs
@@ -23,9 +24,14 @@ local lastLimoMs     = 0     -- last limo spawn timestamp
 -- Box & busking state
 local activeBox      = nil   -- { prop, coords } when begging box is placed
 local boxPickupZone  = nil   -- ox_lib zone for picking up the box
-local buskingActive  = false -- guitar progress bar is running
+local buskingActive  = false -- guitar is being played
 local buskingProp    = nil   -- guitar prop entity handle
 local placingBox     = false -- currently in 3D placement preview mode
+
+-- Forward declarations — bodies are assigned later in the file so that stopBeg
+-- and onResourceStop can call them without Lua treating them as globals (nil).
+local clearActiveLimo
+local stopBusking
 
 -- ---- Subtitle helper ------------------------------------------------------
 
@@ -33,7 +39,7 @@ local function pick(t) return t[math.random(#t)] end
 
 local function subtitle(category, override)
     if not Config.Subtitles.enabled then return end
-    local line = override or pick(Config.SubtitleLines[category] or { '' })
+    local line = override or pick(SubtitleLines[category] or { '' })
     if not line or line == '' then return end
     BeginTextCommandPrint('STRING')
     AddTextComponentSubstringPlayerName(line)
@@ -152,7 +158,36 @@ local function clearActiveOffer(success)
     -- Unfreeze and resume driver / wander ped
     if activeOffer.kind == 'car' and activeOffer.veh and DoesEntityExist(activeOffer.veh) then
         FreezeEntityPosition(activeOffer.veh, false)
-        if activeOffer.driver and DoesEntityExist(activeOffer.driver) then
+        if activeOffer.isLimo then
+            -- Let the limo drive away naturally, then delete once it's far from the player
+            local capV = activeOffer.veh
+            local capD = activeOffer.driver
+            if capD and DoesEntityExist(capD) then
+                ClearPedTasks(capD)
+                TaskVehicleDriveWander(capD, capV, 20.0, 786603)
+            end
+            CreateThread(function()
+                local deadline = GetGameTimer() + 60000  -- hard cap: delete after 60 s regardless
+                while GetGameTimer() < deadline do
+                    Wait(2000)
+                    if not (capV and DoesEntityExist(capV)) then return end
+                    if #(GetEntityCoords(PlayerPedId()) - GetEntityCoords(capV)) > 80.0 then
+                        if capD and DoesEntityExist(capD) then
+                            SetEntityAsMissionEntity(capD, true, true); DeleteEntity(capD)
+                        end
+                        SetEntityAsMissionEntity(capV, true, true); DeleteEntity(capV)
+                        return
+                    end
+                end
+                -- Safety fallback
+                if capD and DoesEntityExist(capD) then
+                    SetEntityAsMissionEntity(capD, true, true); DeleteEntity(capD)
+                end
+                if capV and DoesEntityExist(capV) then
+                    SetEntityAsMissionEntity(capV, true, true); DeleteEntity(capV)
+                end
+            end)
+        elseif activeOffer.driver and DoesEntityExist(activeOffer.driver) then
             ClearPedTasks(activeOffer.driver)
             TaskVehicleDriveWander(activeOffer.driver, activeOffer.veh, 18.0, 786603)
         end
@@ -175,19 +210,22 @@ local function clearActiveCop()
     if activeCop.veh and DoesEntityExist(activeCop.veh) then
         SetVehicleSiren(activeCop.veh, false)
     end
-    if activeCop.cleanupAt then
-        local capVeh = activeCop.veh
-        local capDriver = activeCop.driver
-        Citizen.SetTimeout(math.max(0, activeCop.cleanupAt - GetGameTimer()), function()
-            for _, ent in ipairs({ capDriver, activeCop and activeCop.passenger, capVeh }) do
-                if ent and DoesEntityExist(ent) then
-                    SetEntityAsMissionEntity(ent, true, true)
-                    DeleteEntity(ent)
-                end
-            end
-        end)
-    end
+    -- Capture refs before nil-ing so the timeout closure still has them
+    local capVeh    = activeCop.veh
+    local capDriver = activeCop.driver
+    local delay     = activeCop.cleanupAt and math.max(0, activeCop.cleanupAt - GetGameTimer()) or 0
     activeCop = nil
+    -- Delete both ped and vehicle explicitly — don't release to ambient traffic
+    Citizen.SetTimeout(delay, function()
+        if capDriver and DoesEntityExist(capDriver) then
+            SetEntityAsMissionEntity(capDriver, true, true)
+            DeleteEntity(capDriver)
+        end
+        if capVeh and DoesEntityExist(capVeh) then
+            SetEntityAsMissionEntity(capVeh, true, true)
+            DeleteEntity(capVeh)
+        end
+    end)
 end
 
 local function clearActiveMugger()
@@ -198,6 +236,23 @@ local function clearActiveMugger()
         TaskWanderStandard(activeMugger.ped, 10.0, 10)
     end
     activeMugger = nil
+end
+
+-- Assigned here so the forward declaration at the top resolves correctly.
+stopBusking = function()
+    if not buskingActive then return end
+    buskingActive = false
+    lib.hideTextUI()
+    local ped  = PlayerPedId()
+    local gcfg = Config.Guitar
+    FreezeEntityPosition(ped, false)   -- release before clearing tasks
+    StopAnimTask(ped, gcfg.animDict, gcfg.animClip, 3.0)
+    ClearPedTasks(ped)
+    if buskingProp and DoesEntityExist(buskingProp) then
+        DetachEntity(buskingProp, false, false)
+        DeleteObject(buskingProp)
+        buskingProp = nil
+    end
 end
 
 local function stopBeg()
@@ -212,10 +267,10 @@ local function stopBeg()
     clearActiveCop()
     clearActiveLimo()
     clearActiveMugger()
+    stopBusking()
     activeVariant = nil
     begHeading    = 0
     begStartTime  = 0
-    if buskingActive then lib.cancelProgress() end
 end
 
 local function walkBackToOrigin()
@@ -360,6 +415,14 @@ local function payoutAmount()
     local tier = getActiveTier()
     local cfg  = (tier ~= 'sign_only') and (Config.PayoutTiers and Config.PayoutTiers[tier]) or nil
     if not cfg then cfg = Config.Payout end  -- sign_only uses existing Config.Payout
+
+    -- Coin-give chance: NPC digs for change instead of pulling out a bill.
+    -- Returns amount = 0 as a signal; caller triggers umw:beg:coinGive instead.
+    local coinCfg = Config.CoinGive
+    if coinCfg and math.random(100) <= (coinCfg.chance or 0) then
+        return 0, false, tier
+    end
+
     local generous = math.random(100) <= (cfg.generousChance or Config.Payout.generousChance)
     local amount   = generous
         and math.random(cfg.generousMin or Config.Payout.generousMin, cfg.generousMax or Config.Payout.generousMax)
@@ -396,9 +459,11 @@ local function outcomeGiveCar(veh, driverPed, driverNet)
         expiresAt = GetGameTimer() + Config.Offer.timeoutMs,
         claimed = false,
     }
-    -- Stop beg anim so the player can walk
-    if activeVariant then StopAnimTask(PlayerPedId(), activeVariant.dict, activeVariant.clip, 2.0) end
-    TaskGoToEntity(PlayerPedId(), veh, Config.Offer.autoWalkTimeoutMs, Config.Offer.claimRadius - 1.0, Config.Offer.autoWalkSpeed, 1073741824, 0)
+    -- Clear task tree so the navigation task isn't blocked by the sitting/ambient anim
+    local selfPed = PlayerPedId()
+    if activeVariant then StopAnimTask(selfPed, activeVariant.dict, activeVariant.clip, 1.0) end
+    ClearPedTasks(selfPed)
+    TaskGoToEntity(selfPed, veh, Config.Offer.autoWalkTimeoutMs, Config.Offer.claimRadius - 1.0, Config.Offer.autoWalkSpeed, 1073741824, 0)
 end
 
 -- Generous pedestrian waves you over
@@ -418,8 +483,11 @@ local function outcomeGivePed(targetPed, netId)
         expiresAt = GetGameTimer() + Config.Offer.timeoutMs,
         claimed = false,
     }
-    if activeVariant then StopAnimTask(PlayerPedId(), activeVariant.dict, activeVariant.clip, 2.0) end
-    TaskGoToEntity(PlayerPedId(), targetPed, Config.Offer.autoWalkTimeoutMs, Config.Offer.claimRadius - 1.0, Config.Offer.autoWalkSpeed, 1073741824, 0)
+    -- Clear task tree so the navigation task isn't blocked by the sitting/ambient anim
+    local selfPed2 = PlayerPedId()
+    if activeVariant then StopAnimTask(selfPed2, activeVariant.dict, activeVariant.clip, 1.0) end
+    ClearPedTasks(selfPed2)
+    TaskGoToEntity(selfPed2, targetPed, Config.Offer.autoWalkTimeoutMs, Config.Offer.claimRadius - 1.0, Config.Offer.autoWalkSpeed, 1073741824, 0)
 end
 
 -- Mugger pretends to give then robs the player
@@ -466,17 +534,20 @@ local function drawBustedScreen(durationMs)
     AnimpostfxPlay('DeathFailMPDark', 0, true)
     local until_ = GetGameTimer() + durationMs
     while GetGameTimer() < until_ do
-        DrawRect(0.5, 0.5, 1.0, 1.0, 0, 0, 0, 200)
-        SetTextScale(2.4, 2.4); SetTextFont(7); SetTextColour(220, 30, 30, 255)
-        SetTextOutline(); SetTextCentre(true)
-        BeginTextCommandDisplayText('STRING')
-        AddTextComponentSubstringPlayerName('BUSTED')
-        EndTextCommandDisplayText(0.5, 0.36)
-        SetTextScale(0.55, 0.55); SetTextFont(4); SetTextColour(255, 255, 255, 220)
-        SetTextCentre(true)
-        BeginTextCommandDisplayText('STRING')
-        AddTextComponentSubstringPlayerName('Loitering and panhandling. Off to county you go.')
-        EndTextCommandDisplayText(0.5, 0.52)
+        -- Only draw when the gameplay camera is actually rendering (IS_GAMEPLAY_CAM_RENDERING)
+        if IsGameplayCamRendering() then
+            DrawRect(0.5, 0.5, 1.0, 1.0, 0, 0, 0, 200)
+            SetTextScale(2.4, 2.4); SetTextFont(7); SetTextColour(220, 30, 30, 255)
+            SetTextOutline(); SetTextCentre(true)
+            BeginTextCommandDisplayText('STRING')
+            AddTextComponentSubstringPlayerName('BUSTED')
+            EndTextCommandDisplayText(0.5, 0.36)
+            SetTextScale(0.55, 0.55); SetTextFont(4); SetTextColour(255, 255, 255, 220)
+            SetTextCentre(true)
+            BeginTextCommandDisplayText('STRING')
+            AddTextComponentSubstringPlayerName('Loitering and panhandling. Off to county you go.')
+            EndTextCommandDisplayText(0.5, 0.52)
+        end
         Wait(0)
     end
     AnimpostfxStop('DeathFailMPDark')
@@ -561,7 +632,10 @@ end
 CreateThread(function()
     while true do
         if activeCop and not activeCop.resolved then
-            if not DoesEntityExist(activeCop.driver) or IsEntityDead(activeCop.driver) then
+            -- Hard timeout — clean up even if something prevents the encounter from resolving
+            if activeCop.cleanupAt and GetGameTimer() > activeCop.cleanupAt then
+                clearActiveCop()
+            elseif not DoesEntityExist(activeCop.driver) or IsEntityDead(activeCop.driver) then
                 clearActiveCop()
             else
                 local plyCoords = GetEntityCoords(PlayerPedId())
@@ -590,9 +664,26 @@ CreateThread(function()
                             Wait(1500)
                             clearActiveCop()
                         else
+                            -- Capture refs and clear state NOW so nothing else touches them,
+                            -- but do NOT schedule deletion yet — the cop must stay alive for
+                            -- the entire arrest sequence (dialog + hands-up + busted screen).
                             local copRef = activeCop.driver
-                            clearActiveCop()
+                            local capVeh  = activeCop.veh
+                            local capBlip = activeCop.blip
+                            activeCop = nil
+                            if capBlip and DoesBlipExist(capBlip) then RemoveBlip(capBlip) end
+                            if capVeh  and DoesEntityExist(capVeh)  then SetVehicleSiren(capVeh, false) end
+                            -- Run the full arrest sequence (yields this thread)
                             handleArrestChoice(copRef)
+                            -- Sequence finished — now safe to delete both entities
+                            if copRef and DoesEntityExist(copRef) then
+                                SetEntityAsMissionEntity(copRef, true, true)
+                                DeleteEntity(copRef)
+                            end
+                            if capVeh and DoesEntityExist(capVeh) then
+                                SetEntityAsMissionEntity(capVeh, true, true)
+                                DeleteEntity(capVeh)
+                            end
                         end
                     end
                 end
@@ -606,7 +697,8 @@ end)
 
 -- ---- Limo encounter (rare, always generous) ---------------------------------
 
-local function clearActiveLimo()
+-- Fills the forward declaration at the top of the file.
+clearActiveLimo = function()
     if not activeLimo then return end
     if activeLimo.blip and DoesBlipExist(activeLimo.blip) then RemoveBlip(activeLimo.blip) end
     if activeLimo.veh and DoesEntityExist(activeLimo.veh) then
@@ -655,7 +747,12 @@ local function spawnLimoEncounter()
     if not driverPed then SetEntityAsMissionEntity(veh, true, true); DeleteEntity(veh); return end
 
     SetEntityAsMissionEntity(driverPed, true, true)
-    TaskVehicleDriveToCoordLongrange(driverPed, veh, plyCoords.x, plyCoords.y, plyCoords.z, cfg.driveSpeed, 786603, 5.0)
+
+    -- Drive to the nearest road node rather than the player's exact position
+    -- so the limo pulls up to the curb instead of mounting the pavement.
+    local rFound, rNode = GetClosestVehicleNode(plyCoords.x, plyCoords.y, plyCoords.z, 1, 3.0, 0)
+    local tgt = rFound and rNode or plyCoords
+    TaskVehicleDriveToCoordLongrange(driverPed, veh, tgt.x, tgt.y, tgt.z, cfg.driveSpeed, 786603, 10.0)
 
     activeLimo = {
         veh = veh, driver = driverPed,
@@ -682,7 +779,8 @@ CreateThread(function()
                or not DoesEntityExist(activeLimo.veh) then
                 clearActiveLimo()
             else
-                if #(GetEntityCoords(PlayerPedId()) - GetEntityCoords(activeLimo.veh)) <= 7.0 then
+                if #(GetEntityCoords(PlayerPedId()) - GetEntityCoords(activeLimo.veh)) <= 14.0
+                   and GetEntitySpeed(activeLimo.veh) < 4.0 then
                     activeLimo.resolved = true
                     local capVeh    = activeLimo.veh
                     local capDriver = activeLimo.driver
@@ -702,6 +800,7 @@ CreateThread(function()
                         expiresAt = GetGameTimer() + Config.LimoEncounter.offerTimeoutMs,
                         claimed = false,
                         payoutOverride = math.random(Config.LimoEncounter.payoutMin, Config.LimoEncounter.payoutMax),
+                        isLimo = true,  -- flag so clearActiveOffer deletes entities instead of releasing to traffic
                     }
                     if activeVariant then StopAnimTask(PlayerPedId(), activeVariant.dict, activeVariant.clip, 2.0) end
                     TaskGoToEntity(PlayerPedId(), capVeh, Config.LimoEncounter.offerTimeoutMs, Config.Offer.claimRadius - 1.0, Config.Offer.autoWalkSpeed, 1073741824, 0)
@@ -760,42 +859,30 @@ CreateThread(function()
     end
 end)
 
--- ---- Roll scheduler ------------------------------------------------------
+-- ---- Roll scheduler (auto-beg mode — cars only) --------------------------
 
 CreateThread(function()
     while true do
-        if begging and not activeOffer and not (activeCop and not activeCop.resolved) then
+        if autoBeg and begging and not activeOffer and not (activeCop and not activeCop.resolved) then
             Wait(math.random(Config.RollIntervalMinMs, Config.RollIntervalMaxMs))
-            if begging and not activeOffer then
+            if autoBeg and begging and not activeOffer then
+                -- Cars only — peds do not approach in auto mode
                 local cand = findCandidate()
-                if cand then
+                if cand and cand.kind == 'car' then
+                    driverCooldown[cand.ped] = GetGameTimer() + Config.PerDriverCooldownMs
                     local outcome = rollOutcome(cand.ped)
-                    if cand.kind == 'car' then
-                        driverCooldown[cand.ped] = GetGameTimer() + Config.PerDriverCooldownMs
-                        if outcome == 'give' then outcomeGiveCar(cand.veh, cand.ped, cand.ped)
-                        elseif outcome == 'yell' then outcomeYellCar(cand.veh, cand.ped)
-                        elseif outcome == 'cop' then spawnCopEncounter()
-                        else subtitle('ignore') end
-                    else  -- ped
-                        pedCooldown[cand.ped] = GetGameTimer() + Config.PerPedCooldownMs
-                        if outcome == 'give' then
-                            if math.random(100) <= Config.Mug.chance then
-                                outcomeMug(cand.ped)
-                            else
-                                outcomeGivePed(cand.ped, cand.ped)
-                            end
-                        elseif outcome == 'yell' then outcomeYellPed(cand.ped)
-                        elseif outcome == 'cop' then spawnCopEncounter()
-                        else subtitle('ignore') end
-                    end
+                    if     outcome == 'give' then outcomeGiveCar(cand.veh, cand.ped, cand.ped)
+                    elseif outcome == 'yell' then outcomeYellCar(cand.veh, cand.ped)
+                    elseif outcome == 'cop'  then spawnCopEncounter()
+                    else subtitle('ignore') end
                 end
 
                 -- Limo: rare bonus event, only after begging for a while
                 local lcfg = Config.LimoEncounter
                 if not activeOffer and not activeCop and not activeLimo
                    and begStartTime > 0
-                   and (GetGameTimer() - begStartTime)  >= lcfg.minBegTimeMs
-                   and (GetGameTimer() - lastLimoMs)    >= lcfg.cooldownMs
+                   and (GetGameTimer() - begStartTime) >= lcfg.minBegTimeMs
+                   and (GetGameTimer() - lastLimoMs)   >= lcfg.cooldownMs
                    and math.random(100) <= lcfg.triggerChance then
                     lastLimoMs = GetGameTimer()
                     spawnLimoEncounter()
@@ -804,10 +891,10 @@ CreateThread(function()
                 -- Drive-by toss: moving car passing close tosses change without stopping
                 local cfg = Config.DriveByToss
                 if cfg.enabled and (GetGameTimer() - lastTossMs) > cfg.cooldownMs then
-                    local self2  = PlayerPedId()
-                    local pc2    = GetEntityCoords(self2)
-                    local fwd2   = GetEntityForwardVector(self2)
-                    local hcc    = math.cos(math.rad(Config.ConeAngleDegrees * 0.5))
+                    local self2 = PlayerPedId()
+                    local pc2   = GetEntityCoords(self2)
+                    local fwd2  = GetEntityForwardVector(self2)
+                    local hcc   = math.cos(math.rad(Config.ConeAngleDegrees * 0.5))
                     for _, mv in ipairs(GetGamePool('CVehicle')) do
                         if DoesEntityExist(mv) and GetEntitySpeed(mv) > Config.MaxVehicleSpeedToTarget then
                             local vc2 = GetEntityCoords(mv)
@@ -819,7 +906,8 @@ CreateThread(function()
                                         if drv ~= 0 and DoesEntityExist(drv) and not IsPedAPlayer(drv) then
                                             lastTossMs = GetGameTimer()
                                             StartVehicleHorn(mv, 350, GetHashKey('NORMAL'), false)
-                                            TriggerServerEvent('umw:beg:reward', math.random(cfg.min, cfg.max), false, 'driver')
+                                            local tossCount = math.random(cfg.min, cfg.max)
+                                            TriggerServerEvent('umw:beg:coinGive', tossCount)
                                             subtitle('toss')
                                         end
                                     end
@@ -832,6 +920,88 @@ CreateThread(function()
             end
         else
             Wait(800)
+        end
+    end
+end)
+
+-- ---- Manual beg mode ([E] press on nearby car or ped) --------------------
+
+CreateThread(function()
+    while true do
+        if not autoBeg and begging and not activeOffer then
+            local ped     = PlayerPedId()
+            local coords  = GetEntityCoords(ped)
+            local now     = GetGameTimer()
+            local nearest = nil
+            local nearDist = 5.0
+
+            -- Stopped vehicles in range
+            for _, veh in ipairs(GetGamePool('CVehicle')) do
+                if DoesEntityExist(veh) and not IsEntityDead(veh) then
+                    local driver = GetPedInVehicleSeat(veh, -1)
+                    if driver ~= 0 and DoesEntityExist(driver)
+                       and not IsPedAPlayer(driver) and not IsEntityDead(driver) then
+                        local cd = driverCooldown[driver]
+                        if not cd or now > cd then
+                            if GetEntitySpeed(veh) <= Config.MaxVehicleSpeedToTarget then
+                                local dist = #(GetEntityCoords(veh) - coords)
+                                if dist < nearDist then
+                                    nearest  = { kind = 'car', veh = veh, ped = driver, dist = dist }
+                                    nearDist = dist
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- Nearby peds (walking / standing)
+            for _, p in ipairs(GetGamePool('CPed')) do
+                if DoesEntityExist(p) and not IsPedAPlayer(p)
+                   and not IsEntityDead(p) and not IsPedInAnyVehicle(p, false) then
+                    local cd = pedCooldown[p]
+                    if not cd or now > cd then
+                        local dist = #(GetEntityCoords(p) - coords)
+                        if dist < nearDist then
+                            nearest  = { kind = 'ped', veh = nil, ped = p, dist = dist }
+                            nearDist = dist
+                        end
+                    end
+                end
+            end
+
+            if nearest then
+                lib.showTextUI('[E] Beg')
+                if IsControlJustPressed(0, 38) then   -- E key
+                    lib.hideTextUI()
+                    if nearest.kind == 'car' then
+                        driverCooldown[nearest.ped] = GetGameTimer() + Config.PerDriverCooldownMs
+                        local outcome = rollOutcome(nearest.ped)
+                        if     outcome == 'give' then outcomeGiveCar(nearest.veh, nearest.ped, nearest.ped)
+                        elseif outcome == 'yell' then outcomeYellCar(nearest.veh, nearest.ped)
+                        elseif outcome == 'cop'  then spawnCopEncounter()
+                        else subtitle('ignore') end
+                    else
+                        pedCooldown[nearest.ped] = GetGameTimer() + Config.PerPedCooldownMs
+                        local outcome = rollOutcome(nearest.ped)
+                        if outcome == 'give' then
+                            if math.random(100) <= Config.Mug.chance then
+                                outcomeMug(nearest.ped)
+                            else
+                                outcomeGivePed(nearest.ped, nearest.ped)
+                            end
+                        elseif outcome == 'yell' then outcomeYellPed(nearest.ped)
+                        elseif outcome == 'cop'  then spawnCopEncounter()
+                        else subtitle('ignore') end
+                    end
+                end
+            else
+                lib.hideTextUI()
+            end
+            Wait(100)
+        else
+            lib.hideTextUI()
+            Wait(500)
         end
     end
 end)
@@ -871,8 +1041,21 @@ CreateThread(function()
                         else   sourceTag = activeOffer.kind == 'ped' and 'ped' or 'driver'
                         end
                     end
-                    TriggerServerEvent('umw:beg:reward', amount, generous, sourceTag)
-                    subtitle(activeOffer.payoutOverride and 'limo_collect' or (generous and 'give_generous' or (activeOffer.kind == 'ped' and 'ped_give' or 'give')))
+                    if amount > 0 then
+                        TriggerServerEvent('umw:beg:reward', amount, generous, sourceTag)
+                        subtitle(activeOffer.payoutOverride and 'limo_collect' or (generous and 'give_generous' or (activeOffer.kind == 'ped' and 'ped_give' or 'give')))
+                    else
+                        -- Coin give: NPC digs for change; no paper money
+                        local coinCount = math.random(Config.CoinGive.countMin, Config.CoinGive.countMax)
+                        TriggerServerEvent('umw:beg:coinGive', coinCount)
+                        subtitle(activeOffer.kind == 'ped' and 'ped_give' or 'give')
+                    end
+                    -- Progression hooks
+                    GainXP(generous and Config.XPRewards.beg_generous or Config.XPRewards.beg_success, 'beg')
+                    GainSkillXP('beg_success')
+                    if generous then GainSkillXP('beg_generous') end
+                    if sourceTag == 'limo_nice' then GainSkillXP('limo') end
+                    if Config.NeedsEnabled then TriggerEvent('um_hobos:moraleBump', generous and 10 or 5) end
 
                     Wait(1500)
                     clearActiveOffer(true)
@@ -904,12 +1087,22 @@ CreateThread(function()
 end)
 
 -- ---- Animation guard -----------------------------------------------------
+-- Keeps whichever animation should be playing from getting cancelled by GTA.
 
 CreateThread(function()
     while true do
         if begging and activeVariant and not activeOffer and not buskingActive then
             if not IsPedInAnyVehicle(PlayerPedId(), false) and not isVariantPlaying(activeVariant) then
                 playVariant(activeVariant)
+            end
+            Wait(3000)
+        elseif buskingActive then
+            -- Keep the guitar animation alive
+            local gcfg = Config.Guitar
+            if not IsEntityPlayingAnim(PlayerPedId(), gcfg.animDict, gcfg.animClip, 3) then
+                if loadDict(gcfg.animDict, 2000) then
+                    TaskPlayAnim(PlayerPedId(), gcfg.animDict, gcfg.animClip, 5.0, -1, -1, 51, 0, false, false, false)
+                end
             end
             Wait(3000)
         else
@@ -1099,7 +1292,17 @@ end)
 
 RegisterNetEvent('um_beg:startBusking')
 AddEventHandler('um_beg:startBusking', function()
-    if buskingActive then return end
+    if not isOnHoboJob() then
+        lib.notify({ type = 'error', description = Lang.not_on_duty, duration = 3000 })
+        return
+    end
+    -- Toggle off if already playing
+    if buskingActive then
+        stopBusking()
+        lib.notify({ type = 'inform', description = 'You stop playing.', duration = 3000 })
+        return
+    end
+
     local gcfg = Config.Guitar
 
     -- Box proximity check
@@ -1139,41 +1342,71 @@ AddEventHandler('um_beg:startBusking', function()
     end
 
     buskingActive = true
+    FreezeEntityPosition(ped, true)    -- player stays put; peds come to the box
+    lib.showTextUI('[Use Guitar Item] Stop Busking')
+    lib.notify({ type = 'success', description = 'You start playing. Passersby may toss money in the box!', duration = 4000 })
 
-    -- 2-minute progress bar
-    local done = lib.progressBar({
-        duration     = gcfg.durationMs,
-        label        = 'Busking...',
-        useWhileDead = false,
-        canCancel    = true,
-        disable      = { move = true, car = true, combat = true, sprint = true },
-    })
+    -- Passive audience loop — peds walk up to the box and pay while busking.
+    -- Runs independently so the player can move around freely.
+    CreateThread(function()
+        while buskingActive do
+            Wait(Config.BeggingBox.audienceIntervalMs)
+            if not buskingActive then break end
 
-    -- Clean up regardless of whether cancelled
-    buskingActive = false
-    StopAnimTask(ped, gcfg.animDict, gcfg.animClip, 3.0)
-    if buskingProp and DoesEntityExist(buskingProp) then
-        DetachEntity(buskingProp, false, false)
-        DeleteObject(buskingProp)
-        buskingProp = nil
-    end
+            -- Stop if box was picked up
+            if not activeBox or not DoesEntityExist(activeBox.prop) then
+                stopBusking()
+                lib.notify({ type = 'error', description = 'Your box is gone — you stop playing.', duration = 3000 })
+                break
+            end
 
-    if done then
-        local tcfg    = Config.PayoutTiers.box_and_guitar
-        local generous = math.random(100) <= tcfg.generousChance
-        local amount   = generous
-            and math.random(tcfg.generousMin, tcfg.generousMax)
-            or  math.random(tcfg.min, tcfg.max)
-        TriggerServerEvent('umw:beg:reward', amount, generous, 'busking')
-        subtitle(generous and 'give_generous' or 'give')
-    else
-        lib.notify({ type = 'inform', description = 'You stopped busking.', duration = 3000 })
-    end
+            local boxCoords   = GetEntityCoords(activeBox.prop)
+            local closestPed, closestDist = nil, 20.0
+            for _, p in ipairs(GetGamePool('CPed')) do
+                if DoesEntityExist(p) and not IsPedAPlayer(p) and not IsEntityDead(p)
+                   and not IsPedInAnyVehicle(p, false) then
+                    local d = #(GetEntityCoords(p) - boxCoords)
+                    if d < closestDist then closestPed = p; closestDist = d end
+                end
+            end
+
+            if closestPed and buskingActive then
+                SetEntityAsMissionEntity(closestPed, true, true)
+                SetBlockingOfNonTemporaryEvents(closestPed, true)
+                TaskGoToCoordAnyMeans(closestPed, boxCoords.x, boxCoords.y, boxCoords.z, 1.2, 0, false, 1, 0.0)
+                local deadline = GetGameTimer() + 12000
+                while GetGameTimer() < deadline and buskingActive
+                      and activeBox and DoesEntityExist(activeBox.prop) do
+                    if #(GetEntityCoords(closestPed) - boxCoords) < 2.0 then break end
+                    Wait(400)
+                end
+                if buskingActive and activeBox and DoesEntityExist(closestPed) then
+                    ClearPedTasks(closestPed)
+                    Wait(1200)
+                    if buskingActive and activeBox then
+                        local tcfg     = Config.PayoutTiers.box_and_guitar
+                        local generous = math.random(100) <= tcfg.generousChance
+                        local amount   = generous
+                            and math.random(tcfg.generousMin, tcfg.generousMax)
+                            or  math.random(tcfg.min,         tcfg.max)
+                        TriggerServerEvent('umw:beg:reward', amount, generous, 'busking')
+                        subtitle(generous and 'give_generous' or 'ped_give')
+                    end
+                end
+                SetEntityAsNoLongerNeeded(closestPed)
+                SetBlockingOfNonTemporaryEvents(closestPed, false)
+            end
+        end
+    end)
 end)
 
 -- Item use → start 3D placement preview
 RegisterNetEvent('um_beg:placeBox')
 AddEventHandler('um_beg:placeBox', function()
+    if not isOnHoboJob() then
+        lib.notify({ type = 'error', description = Lang.not_on_duty, duration = 3000 })
+        return
+    end
     Wait(200)   -- let inventory close first
     startBoxPlacement()
 end)
@@ -1182,9 +1415,30 @@ end)
 
 -- /beg command (works with or without ox_inventory)
 RegisterCommand('beg', function()
+    if not isOnHoboJob() then
+        lib.notify({ type = 'error', description = Lang.not_on_duty, duration = 3000 })
+        return
+    end
     if begging then stopBeg() else startBeg() end
 end, false)
 TriggerEvent('chat:addSuggestion', '/beg', 'Toggle begging at the side of the road')
+
+-- /autobeg — toggle between auto (cars approach you) and manual (walk up and press E)
+RegisterCommand('autobeg', function()
+    if not isOnHoboJob() then
+        lib.notify({ type = 'error', description = Lang.not_on_duty, duration = 3000 })
+        return
+    end
+    autoBeg = not autoBeg
+    lib.notify({
+        type        = 'inform',
+        description = autoBeg
+            and 'Auto-beg ON — stay in place, cars will stop for you.'
+            or  'Auto-beg OFF — walk up to cars or peds and press [E] to beg.',
+        duration    = 5000,
+    })
+end, false)
+TriggerEvent('chat:addSuggestion', '/autobeg', 'Toggle auto-beg (cars approach you) vs manual (walk up and press E)')
 
 -- ox_inventory item use → same as /beg
 -- AddEventHandler catches both local (client.event) and network triggers.
@@ -1192,6 +1446,10 @@ TriggerEvent('chat:addSuggestion', '/beg', 'Toggle begging at the side of the ro
 -- GTA suppresses native subtitle rendering while NUI has focus.
 RegisterNetEvent('um_beg:useSign')
 AddEventHandler('um_beg:useSign', function()
+    if not isOnHoboJob() then
+        lib.notify({ type = 'error', description = Lang.not_on_duty, duration = 3000 })
+        return
+    end
     if begging then
         stopBeg()
     else
@@ -1203,7 +1461,7 @@ end)
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
     clearProp(); clearActiveOffer(false); clearActiveCop(); clearActiveLimo(); clearActiveMugger()
-    if buskingActive then lib.cancelProgress() end
+    stopBusking()
     if buskingProp and DoesEntityExist(buskingProp) then DeleteObject(buskingProp) end
     if activeBox   and DoesEntityExist(activeBox.prop) then
         SetEntityAsMissionEntity(activeBox.prop, true, true)
