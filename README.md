@@ -1,7 +1,6 @@
-# Street Beggar — Hobo Tough Life
-
 <img width="938" height="572" alt="beggar" src="https://github.com/user-attachments/assets/73754c47-b70f-46dd-938c-b50b5026ae29" />
 
+# Street Beggar — Hobo Tough Life
 
 Street survival resource for **Qbox / QBX** servers. Combines a full begging system with an optional hobo job layer — progression, scavenging, pickpocketing, campfire, odd jobs, fence, and more.
 
