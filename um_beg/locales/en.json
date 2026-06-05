@@ -1,0 +1,134 @@
+{
+  "start": [
+    "You start panhandling. Maybe someone will notice you...",
+    "Time to make some change.",
+    "Hold up the sign and hope for the best.",
+    "You take your spot on the sidewalk. Time to hustle.",
+    "Another day, another street corner.",
+    "You plant yourself on the curb and wait.",
+    "Sign up. Dignity down. Let's go.",
+    "Eyes on the road, hand out. Classic."
+  ],
+  "give": [
+    "~g~A generous soul slipped you some cash.",
+    "~g~Bless 'em. They actually noticed.",
+    "~g~Cash in hand. Tonight's not so bad.",
+    "~g~Score! A few bucks toward dinner.",
+    "~g~Someone actually stopped. You'll take it.",
+    "~g~A quiet hand reaches out the window.",
+    "~g~Small bills, big heart.",
+    "~g~Not much, but it's honest money.",
+    "~g~They saw you. That alone means something."
+  ],
+  "give_generous": [
+    "~g~Holy hell, look at this stack!",
+    "~g~Somebody's feeling REAL generous tonight.",
+    "~g~A nice big bill. Don't spend it all in one place.",
+    "~g~That's more than you expected. Way more.",
+    "~g~You nearly drop the sign in shock.",
+    "~g~Jackpot. You could eat for a week.",
+    "~g~Must be their lucky day — and yours.",
+    "~g~That's... actually a lot. Thank you, stranger."
+  ],
+  "yell": [
+    "~r~\"Get a job, you bum!\"",
+    "~r~\"Get away from my car!\"",
+    "~r~\"Beat it before I call the cops!\"",
+    "~r~\"Disgusting. Leave me alone!\"",
+    "~r~\"I work for a living, so should you!\"",
+    "~r~\"Keep moving, loser!\"",
+    "~r~\"Nobody wants you here!\"",
+    "~r~\"Don't touch my car!\"",
+    "~r~\"Go beg somewhere else!\"",
+    "~r~\"I'll call the cops, I swear!\""
+  ],
+  "ignore": [
+    "They didn't even look at you.",
+    "Driver kept staring straight ahead.",
+    "Maybe they didn't see you.",
+    "Pretended you weren't there.",
+    "Eyes forward. You don't exist to them.",
+    "Not even a glance.",
+    "Invisible. As usual.",
+    "They turned up the radio instead.",
+    "Sunglasses on. Problem solved.",
+    "That one hurt a little.",
+    "Window rolled up tight.",
+    "Stared at the light until it changed."
+  ],
+  "drive_off": [
+    "~r~They pulled away before you could get there.",
+    "~r~Off they went. The light changed.",
+    "~r~Gone. Opportunity missed.",
+    "~r~They didn't have time to wait.",
+    "~r~You were too slow. They drove off.",
+    "~r~So close. The moment passed.",
+    "~r~Didn't even look back.",
+    "~r~They peeled off in disgust."
+  ],
+  "limo_approach": [
+    "A very nice car is making its way over here...",
+    "That's a limo. An actual limo.",
+    "Somebody rich just noticed you.",
+    "A luxury vehicle is slowing down nearby."
+  ],
+  "limo_nice": [
+    "~g~The window rolls down. They wave you over.",
+    "~g~Someone important wants to talk to you.",
+    "~g~The tinted window drops. A hand gestures your way.",
+    "~g~A well-dressed arm extends from the window."
+  ],
+  "limo_collect": [
+    "~g~They press a thick envelope into your hands.",
+    "~g~More money than you've seen all week. Just like that.",
+    "~g~\"Keep it.\" The window rolls back up.",
+    "~g~A generous soul. You won't forget this one.",
+    "~g~Enough to last you a while. Unbelievable."
+  ],
+  "limo_mean": [
+    "~r~The window cracks open just enough to sneer at you.",
+    "~r~\"Pathetic.\" The limo drives off without a second glance.",
+    "~r~A dismissive wave. They don't even look at you.",
+    "~r~Rich enough to help. Chose not to."
+  ],
+  "ped_yell": [
+    "~r~\"Bug off!\"",
+    "~r~\"I don't have anything!\"",
+    "~r~\"Move along!\"",
+    "~r~\"Stop harassing people!\"",
+    "~r~\"Get out of my face!\"",
+    "~r~\"I'm calling someone if you don't leave!\"",
+    "~r~\"You're blocking the sidewalk!\""
+  ],
+  "ped_give": [
+    "~g~The passerby slips you a few bucks.",
+    "~g~\"Here you go, friend.\"",
+    "~g~A kind stranger helped you out.",
+    "~g~They didn't have much, but they shared anyway.",
+    "~g~\"Take care of yourself, okay?\"",
+    "~g~Quietly dropped some cash in your hand.",
+    "~g~A nod and a few bills. No words needed.",
+    "~g~\"I've been there. Keep going.\""
+  ],
+  "toss": [
+    "~g~A driver tossed coins as they rolled past.",
+    "~g~Coins scattered from the window — you scooped them up.",
+    "~g~A handful of change flew out of a moving car.",
+    "~g~Lucky catch. A fistful of coins out the window.",
+    "~g~A quick honk and loose change raining down.",
+    "~g~They didn't stop, but they dug for change on their way out."
+  ],
+  "mug_approach": [
+    "Someone's walking over...",
+    "A stranger catches your eye and heads your way.",
+    "Looks like someone noticed you.",
+    "A passerby seems to be coming towards you."
+  ],
+  "mug_reveal": [
+    "~r~It was a setup — they grab your cash and bolt!",
+    "~r~You've been robbed! They snatched what you earned!",
+    "~r~A decoy. They take everything and run.",
+    "~r~Sucker play. Robbed clean.",
+    "~r~The friendly face was a lie. Your money's gone."
+  ]
+}

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hobo HUD</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Hobo rank/XP HUD removed — um_hud handles hunger/thirst/stress via qbx state bags -->
+
+    <!-- Pickpocket minigame (shown centered, separate from HUD) -->
+    <div id="pp-game" class="hidden">
+        <div class="pp-title">PICK A POCKET</div>
+        <div class="pp-grid" id="pp-grid">
+            <!-- Slots built dynamically by app.js -->
+        </div>
+        <div class="pp-hint">[ SPACE ] to grab</div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
